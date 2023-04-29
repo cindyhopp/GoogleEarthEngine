@@ -185,7 +185,7 @@ print('SVM Overall Accuracy is', confusionMatrix.accuracy(),
   'Kappa value is', confusionMatrix.kappa());
 
 //////////////// 4. Mapping Land Cover Classification ///////////////////
-// // Classify the Landsat image using Support Vector Machine classifier
+// // Classify the satellite image using Support Vector Machine classifier
 var classified = cochrane_add_bands.select(predictionBands).classify(svm);
 
 // Define classification image visualization parameters.
