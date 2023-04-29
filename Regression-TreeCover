@@ -1,0 +1,362 @@
+// GEE path: https://code.earthengine.google.com/c5d027de80b06b0738b0a6205004d10b
+
+/* 
+GDAA2030 Assignment 2 - Regression
+Author: Cindy Lu
+Date: March 3, 2023
+*/
+
+/*
+In this assignment, various types of regression models are used to predict tree cover 
+based on multispectral imagery and analyze their performances. The Area of Interest (AOI) 
+is set in Waterton Park, Alberta, where major forest fire took place in 2017.
+*/
+
+/////////////////////////////////////////////////////////////////////////////
+// Image Preparation
+
+// The AOI was drawn directly in the map and imported as geometry, 
+// it is set as the centre of display for all map outputs.
+
+var waterton = ee.Geometry.Polygon(
+    [
+      [
+          [-114.64951294512268,48.92868219943949],
+          [-113.68820923418521,48.92868219943949],
+          [-113.68820923418521,49.396543135241224],
+          [-114.64951294512268,49.396543135241224],
+          [-114.64951294512268,48.92868219943949]
+      ]
+    ], null, false);
+
+Map.centerObject(waterton, 9);
+
+// The Percent_Tree_Cover in Modis “MOD44B.006 Terra Vegetation Continuous Fields Yearly Global 250m” 
+// for year 2020 will be used as the dependent variable
+var percentTree2020 = ee.ImageCollection('MODIS/006/MOD44B')
+    .filterDate('2020-01-01', '2021-01-01')
+    .first()
+    .clip(waterton)
+    .select('Percent_Tree_Cover');
+
+// View properties of the Modis percent tree cover image
+print('Modis Percent Tree Cover Properties', percentTree2020);
+
+// Add Modis percent tree cover image to map
+var vegpalette = ['red','white','green'];
+Map.addLayer(percentTree2020, {
+    max: 85,
+    palette:vegpalette
+}, 'Modis Percent Tree Cover');
+
+// A cloud-free 'USGS Landsat 8 Collection 2 Tier 1 and Real-Time data Raw Scenes' image 
+// for the AOI will be used to set the independent variables. 
+
+var landsat8filtered = ee.ImageCollection('LANDSAT/LC08/C02/T1_RT')
+    .filterBounds(waterton.centroid({
+        'maxError': 1
+    }))
+    .filterDate('2020-07-01', '2020-07-30')
+    .sort('CLOUD_COVER')
+    .first();
+    
+// View properties of the Landsat-8 image
+print('Landsat-8 AOI Properties', landsat8filtered);
+
+// Add Landsat-8 True Color image to map.
+var visParams = {
+    bands: ['B4', 'B3', 'B2'],
+    min: 5000,
+    max: 12000
+};
+Map.addLayer(landsat8filtered, visParams, 'Landsat 8 True Color Image');
+
+/////////////////////////////////////////////////////////////////////////////
+// Linear Fit Model using NDVI and Percent Tree Cover
+
+// The Normalized Difference Vegetation Index (NDVI) will be the independent variable for
+// this model, and can be calculated using corresponding bands from Landsat-8
+var ndvi = landsat8filtered.normalizedDifference(['B5', 'B4']);
+
+
+// Add NDVI image to map
+
+Map.addLayer(ndvi,{
+  min:-0.1,
+  max:0.6,
+  palette:vegpalette
+}, 'NDVI');
+
+
+// Create the training image with NDVI as the first variable
+var trainingImage = ndvi.addBands(percentTree2020);
+print('Linear Fit Training Image Properties', trainingImage);
+
+// Conduct Linear Fit using NDVI as independent variable and Percent Tree Cover as dependent variable
+
+var linearFit = trainingImage.reduceRegion({
+    reducer: ee.Reducer.linearFit(),
+    geometry: waterton,
+    scale: 30,
+    bestEffort: true
+});
+
+// View the results, including OLS estimates, y-intercept, and slope values
+print('OLS estimates for Linear Fit:', linearFit);
+print('Linear Fit y-intercept:', linearFit.get('offset'));
+print('Linear Fit Slope:', linearFit.get('scale'));
+
+// Create a prediction based on the linearFit model.
+var predictedTree = ndvi.expression(
+    'intercept + slope * ndvi', {
+        'ndvi': ndvi.select('nd'),
+        'intercept': ee.Number(linearFit.get('offset')),
+        'slope': ee.Number(linearFit.get('scale'))
+    });
+
+print('Predicted Tree Cover Properties', predictedTree);
+
+// Display the results on map
+Map.addLayer(predictedTree, {
+    min:20,
+    max: 35,
+    palette:vegpalette
+}, 'Predicted Percent Tree Cover - Linear Fit NDVI');
+
+/* 
+It is obvious from the map that some areas were not correctly predicted, for example the 
+agriculture fields in the northeast regions of the scene are brighter and were predicted 
+to have over 30% tree coverage, while the actual MODIS coverage is valued at 6%. 
+*/
+
+/* 
+Green Chlorophyll Index (GCI) is another way to analyze the vegetation's physiological state.
+I'm interested to see if using GCI instead would produce a better output.
+*/
+
+// GCI = NIR / Green - 1, define GCI using appropriate bands
+var gci = landsat8filtered.expression('(NIR / Green) - 1', {
+  'NIR': landsat8filtered.select('B5'),
+  'Green': landsat8filtered.select('B3')
+});
+// Add layer to map
+Map.addLayer(gci, {
+  min: -1, 
+  max: 2, 
+  palette:vegpalette
+}, 'Green Chlorophyll Index');
+
+// Conduct Linear Fit model, similar steps as previous model using NDVI, except here GCI is
+// set as the independent variable
+var trainingImage_gci = gci.addBands(percentTree2020);
+print('GCI Linear Fit Training Image Properties', trainingImage_gci);
+
+var linearFit_gci = trainingImage_gci.reduceRegion({
+    reducer: ee.Reducer.linearFit(),
+    geometry: waterton,
+    scale: 30,
+    bestEffort: true
+});
+
+print('OLS estimates for Linear Fit:', linearFit_gci,
+'Linear Fit y-intercept:', linearFit_gci.get('offset'),
+'Linear Fit Slope:', linearFit_gci.get('scale'));
+
+var predictedTree_gci = ndvi.expression(
+    'intercept + slope * gci', {
+        'gci': gci.select('B5'),
+        'intercept': ee.Number(linearFit.get('offset')),
+        'slope': ee.Number(linearFit.get('scale'))
+    });
+
+print('Predicted Tree Cover Properties', predictedTree_gci);
+
+// Display the results on map
+Map.addLayer(predictedTree_gci, {
+    min:20,
+    max: 70,
+    palette:vegpalette
+}, 'Predicted Percent Tree Cover - Linear Fit GCI');
+// The performance is still not ideal. Potentially due to the small predictor size not 
+// capturing the full extent of variability within the Landsat scene. 
+
+/////////////////////////////////////////////////////////////////////////////
+// Linear Regression using Multispectral Bands and Percent Tree Cover
+
+// Assemble the independent variables.
+var predictionBands = [ 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B11'];
+
+// Create the training image stack for linear regression.
+var trainingImageLR = ee.Image(1)
+    .addBands(landsat8filtered.select(predictionBands))
+    .addBands(percentTree2020);
+    
+print('Linear Regression training image:', trainingImageLR);
+
+// Compute ordinary least squares regression coefficients using 
+// the linearRegression reducer.
+var linearRegression = trainingImageLR.reduceRegion({
+    reducer: ee.Reducer.linearRegression({
+        numX: 8,
+        numY: 1
+    }),
+    geometry: waterton,
+    scale: 30,
+    bestEffort: true
+});
+
+// Inspect the results.
+print('Linear regression results:', linearRegression);
+
+// Extract the coefficients as a list.
+var coefficients = ee.Array(linearRegression.get('coefficients'))
+    .project([0])
+    .toList();
+
+print('Coefficients', coefficients);
+
+// Create the predicted tree cover based on linear regression.
+var predictedTreeLR = ee.Image(1)
+    .addBands(landsat8filtered.select(predictionBands))
+    .multiply(ee.Image.constant(coefficients))
+    .reduce(ee.Reducer.sum()) //take sum of multiplication for each pixel
+    .rename('predictedTreeLR')
+    .clip(landsat8filtered.geometry()); //clip to remove pixels outside of the clip extent
+
+// Add predicted tree cover from linear regression to map
+Map.addLayer(predictedTreeLR, {
+    min: 0,
+    max: 60,
+    palette:vegpalette
+}, 'Predicted Tree Cover - Linear Regression');
+
+/////////////////////////////////////////////////////////////////////////////
+// Non-Linear Regression (CART) using Multispectral Bands and Percent Tree Cover
+
+// Create the training data stack.
+var trainingImageCART = ee.Image(landsat8filtered.select(predictionBands))
+    .addBands(percentTree2020);
+
+// Sample the training data stack.
+var trainingData = trainingImageCART.sample({
+    region: waterton,
+    scale: 30,
+    numPixels: 2000,
+    seed: 5
+});
+
+// Examine the CART training data.
+print('CART Training Data Properties', trainingData);
+
+// Run the CART regression.
+var cartRegression = ee.Classifier.smileCart()
+    .setOutputMode('REGRESSION')
+    .train({
+        features: trainingData,
+        classProperty: 'Percent_Tree_Cover',
+        inputProperties: predictionBands
+    });
+
+// Create a prediction of tree cover based on the CART regression.
+var cartRegressionImage = landsat8filtered.select(predictionBands)
+    .classify(cartRegression, 'cartRegression');
+
+Map.addLayer(cartRegressionImage, {
+    min: 0,
+    max: 70,
+    palette:vegpalette
+}, 'CART regression');
+
+/////////////////////////////////////////////////////////////////////////////
+// Assess Model Performance through Root-Mean-Square Error (RMSE) Calculations
+
+// Concatenate percent tree cover image and predictions from all models
+var concat = ee.Image.cat(percentTree2020,
+        predictedTree,
+        predictedTree_gci,
+        predictedTreeLR,
+        cartRegressionImage)
+    .rename([
+        'TCpercent',
+        'LFprediction',
+        'LFprediction_gci',
+        'LRprediction',
+        'CARTprediction'
+    ]);
+
+// Sample pixels and investigate the first feature in the sample set
+var sample = concat.sample({
+    region: waterton,
+    scale: 30,
+    numPixels: 1000,
+    seed: 5
+});
+print('First feature in sample', sample.first());
+// Note that the CART model produced the most accurate prediction, while Linear Fit Model prediction
+// using NDVI was much lower than the actual value. 
+
+// Compute the squared difference between the predicted percent tree cover and the known percent tree cover
+var calculateDiff = function(feature) {
+    var TCpercent = ee.Number(feature.get('TCpercent'));
+    var diffLFsq = ee.Number(feature.get('LFprediction'))
+        .subtract(TCpercent).pow(2);
+    var diffLFGCIsq = ee.Number(feature.get('LFprediction_gci'))
+        .subtract(TCpercent).pow(2);
+    var diffLRsq = ee.Number(feature.get('LRprediction'))
+        .subtract(TCpercent).pow(2);
+    var diffCARTsq = ee.Number(feature.get('CARTprediction'))
+        .subtract(TCpercent).pow(2);
+
+    // Return the feature with the squared difference set to a 'diff' property.
+    return feature.set({
+        'diffLFsq': diffLFsq,
+        'diffLFGCIsq':diffLFGCIsq,
+        'diffLRsq': diffLRsq,
+        'diffCARTsq': diffCARTsq
+    });
+};
+
+// Calculate RMSE for population of difference pairs.
+var rmse = ee.List([ee.Number(
+    // Map the difference function over the collection.
+    sample.map(calculateDiff)
+    // Reduce to get the mean squared difference.
+    .reduceColumns({
+        reducer: ee.Reducer.mean().repeat(4),
+        selectors: ['diffLFsq', 'diffLFGCIsq','diffLRsq',
+            'diffCARTsq'
+        ]
+    }).get('mean')
+    // Flatten the list of lists.
+)]).flatten().map(function(i) {
+    // Take the square root of the mean square differences.
+    return ee.Number(i).sqrt();
+});
+
+// Print the result.
+print('RMSE', rmse);
+
+/* 
+The result is consistent with the results from the first sample point investigated earlier,
+CART model produced the lowest RMSE, meaning it is the most accurate of all models. 
+Linear Fit model using GCI as predictor produced the highest RMSE, indicating the
+poorest performance of all models. 
+
+Agricultural area is a good indicator of model performance in this case, where the better-
+performed models rank low tree cover in those areas, wile the poorly-performed ones rank high. 
+
+Different prediction band combination was also tested, and the result was similar. 
+See below RMSE results for 2 sets of prediction band combinations using the same regression models.
+*/
+
+// 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B10', 'B11'
+// 0: 19.79647398776244
+// 1: 25.12554749918613
+// 2: 14.195887389390428
+// 3: 10.242054503733625
+
+// 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B11'
+// 0: 19.79647398776244
+// 1: 25.12554749918613
+// 2: 14.235848868397929
+// 3: 10.331726001527857
