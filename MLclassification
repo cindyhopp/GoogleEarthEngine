@@ -1,0 +1,260 @@
+// GEE path: https://code.earthengine.google.com/6297c170f1742fa9f19c41c2ab1922bf
+
+/*
+GDAA2030 Assignment 1 - Image Classification via Machine Learning
+Author: Cindy Lu
+Date: 2/15/2023
+*/
+
+/*
+In this assignment, machine learning classifiers including CART, RF, and SVM
+are used to perform supervised land cover classifications on a Sentinel-2 image 
+centred around Cochrane, Alberta, Canada.
+*/
+
+//////////////// 1. Image Preparation & Visualization ///////////////////
+
+// Set point of interest using Cochrane's coordinates.
+var point = ee.Geometry.Point([-114.49, 51.19]) 
+
+// Import and filter Sentinel-2 imagery by location, data, and cloud coverage
+var cochrane = ee.ImageCollection('COPERNICUS/S2')
+    .filterBounds(point)
+    .filterDate('2021-05-01', '2021-10-01')
+    .sort('CLOUDY_PIXEL_PERCENTAGE')
+    .first();
+
+// Add image to map, using True Color composite
+Map.centerObject(cochrane, 10);
+
+var visParams = {
+    bands: ['B4', 'B3', 'B2'],
+    min: 0,
+    max: 2000
+};
+Map.addLayer(cochrane, visParams, 'Cochrane True Color');
+
+// Add image using False Color composite to highlight land cover delineation,
+// including water, snow cover, vegetation, barren surface
+Map.addLayer(cochrane, {
+  bands:['B8','B11','B3'],
+  min:500,
+  max:2000
+}, 'Cochrane False Color');
+
+// Compute Normalized Difference Moisture Index (NDMI) and Normalized Difference Snow Index (NDSI)
+var ndmi = cochrane.normalizedDifference(['B8','B12']).rename('NDMI');
+/* NDMI detects moisture level, and can be a good index to delineate
+land cover characteristics such as canopy cover and surface composition. */
+
+var ndsi = cochrane.normalizedDifference(['B3','B11']).rename('NDSI');
+// NDSI has been widely used for snow mapping, and could be a good predictor for classifying snow
+
+// Add NDMI and NDSI bands to the image
+var cochrane_add_bands = cochrane.addBands(ndmi).addBands(ndsi);
+print('Properties of the source image: ', cochrane_add_bands);
+
+// Map out NDMI and NDSI as single bands
+Map.addLayer(cochrane_add_bands,{
+  bands:['NDMI'],
+  min:-0.5,
+  max:0.8, 
+  palette: ['red','yellow','cyan']
+},'NDMI');
+/* Red to dark-orange tone indicate dry areas such as bare rocks and ashphalt, while
+the green to cyan tone highlights areas with high moisture content including 
+water bodies and healthy vegetation. */
+
+Map.addLayer(cochrane_add_bands,{
+  bands:['NDSI'],
+  min:0,
+  max:0.8,
+  palette: ['black','pink']
+},'NDSI');
+/* Not only are the snow-covered areas highlighted in pink, the water bodies are also highlighted.
+Although it may not be the best index to delineate water in its solid and liquid forms, 
+it can still complement other predictors to classify land covers. */
+
+//////////////// 2. Training Dataset & Predictor Selection///////////////////
+
+// Collect training data using the Geometry imports and combine as a Feature Collection
+var trainingFeatures = ee.FeatureCollection([
+    Water, Forest, Herbaceous, Urban_Barren, Snow
+]).flatten();
+
+// Water includes all natural and man-made water bodies such as alpine lakes, rivers, streams, reservoirs, pools.
+// Forest includes areas with dense tall tree coverage.
+// Herbaceous includes non-forest vegetated land cover, including agricultural fields, grassland, lawns, early regenerated forest seedlings.
+// Urban & Barren includes land cover with no or very limited vegetation in both natural and artificial forms.
+// Snow includes snow and glacier coverage typically in the high alpine areas.
+// Note: 65 training points were collected for 'Snow' class and all algorithms performed well in classifying it. 
+
+// Define prediction bands
+// Note: after running several classifications, the combination of the following bands presented the best output
+var predictionBands = [
+    'B2','B3','B4','B8','B11','NDMI','NDSI'
+];
+
+// Create training points
+var classifierTraining = cochrane_add_bands.select(predictionBands)
+    .sampleRegions({
+        collection: trainingFeatures,
+        properties: ['class'],
+        scale: 30
+    });
+
+// Split dataset into training (80% of dataset)and testing sets (20% of dataset)
+var trainingdata = classifierTraining.randomColumn();
+var trainSet = trainingdata
+    .filter(ee.Filter.lessThan('random', 0.8));
+print('Properties of the training dataset',trainSet);
+
+var testSet = trainingdata
+    .filter(ee.Filter.greaterThanOrEquals('random',0.8));
+print('Properties of the testing dataset',testSet);
+
+//////////////// 3. Supervised Machine Learning ///////////////////
+
+//////////////// CART Classifier ///////////////////
+// Train a CART Classifier.
+var cart = ee.Classifier.smileCart().train({
+    features: trainSet,
+    classProperty: 'class',
+    inputProperties: predictionBands
+});
+
+// Classify testing set and create confusion matrix
+var confusionMatrix = testSet.classify(cart)
+    .errorMatrix({
+      actual:'class',
+      predicted:'classification'
+    });
+
+// Print the results.
+print('CART Confusion matrix:', confusionMatrix);
+print('CART Overall Accuracy is', confusionMatrix.accuracy(),
+  'Producers Accuracy is', confusionMatrix.producersAccuracy(),
+  'Consumers Accuracy is', confusionMatrix.consumersAccuracy(),
+  'Kappa value is', confusionMatrix.kappa());
+
+
+//////////////// RF Classifier ///////////////////
+// Train a Random Forest Classifier.
+var rf = ee.Classifier.smileRandomForest(50).train({
+    features: trainSet,
+    classProperty: 'class',
+    inputProperties: predictionBands
+});
+
+// Classify testing set and create confusion matrix
+var confusionMatrix = testSet.classify(rf)
+    .errorMatrix({
+      actual:'class',
+      predicted:'classification'
+    });
+
+// Print the results.
+print('RF Confusion matrix:', confusionMatrix);
+print('RF Overall Accuracy is', confusionMatrix.accuracy(),
+  'Producers Accuracy is', confusionMatrix.producersAccuracy(),
+  'Consumers Accuracy is', confusionMatrix.consumersAccuracy(),
+  'Kappa value is', confusionMatrix.kappa());
+
+
+//////////////// SVM Classifier ///////////////////
+// Train a Support Vector Machine Classifier.
+var svm = ee.Classifier.libsvm()
+    .train({
+    features: trainSet,
+    classProperty: 'class',
+    inputProperties: predictionBands
+});
+
+// Classify testing set and create confusion matrix
+var confusionMatrix = testSet.classify(svm)
+    .errorMatrix({
+      actual:'class',
+      predicted:'classification'
+    });
+
+// Print the results.
+print('SVM Confusion matrix:', confusionMatrix);
+print('SVM Overall Accuracy is', confusionMatrix.accuracy(),
+  'Producers Accuracy is', confusionMatrix.producersAccuracy(),
+  'Consumers Accuracy is', confusionMatrix.consumersAccuracy(),
+  'Kappa value is', confusionMatrix.kappa());
+
+//////////////// 4. Mapping Land Cover Classification ///////////////////
+// // Classify the Landsat image using Support Vector Machine classifier
+var classified = cochrane_add_bands.select(predictionBands).classify(svm);
+
+// Define classification image visualization parameters.
+var classificationVis = {
+    min: 0,
+    max: 4,
+    palette: ['70a0d6', '1a9554','5dc859','fbffa2','def2ff']
+};
+
+// Add the classified image to the map.
+Map.addLayer(classified, classificationVis, 'Land Cover Classes using SVM');
+
+// Add a legend with land cover classes
+// Create a panel to hold the legend elements and add to map
+var legend = ui.Panel({
+  style: {position: 'bottom-left'}
+});
+
+Map.add(legend);
+
+// Add the legend title
+var legendTitle = ui.Label({
+  value: 'Land Cover Classes',
+  style: {fontWeight: 'bold', fontSize: '18px', margin: '5px 0 10px 0'}
+});
+legend.add(legendTitle);
+
+// Create color and landcover lists
+var color = ['70a0d6', '1a9554','5dc859','fbffa2','def2ff'];
+var landcover = ['Water', 'Forest', 'Herbaceous', 'Urban & Barren', 'Snow'];
+
+// Create a function to generate legend list
+var legendlist = function(color, landcover){
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: color,
+      padding: '8px',
+      margin: '4px'
+    }
+  })
+  var label = ui.Label({
+    value: landcover,
+    style: {margin: '4px'}
+  })
+  
+  return ui.Panel({
+    widgets: [colorBox, label],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  })
+};
+
+// Loop through the legend lists and add to the legend panel
+for (var a=0; a<5; a++){
+  legend.add(legendlist(color[a],landcover[a]))
+}
+
+//////////////// 5. Summary ///////////////////
+
+/* Support Vector Machine produced the most accurate classification result, with an
+overall accuracy of 95%. Several training points for the 'Urban & Barren' areas
+were placed in shadowed areas, however the algorithm still seem to struggle with
+shadowed areas being misclassified as 'Water', as can be seen in areas around the 
+'shadow' pin. Uncomment the follwoing code to center the map around the shadow pin. */
+// Map.centerObject(shadow, 13);
+
+/* During the training stage, it was difficult to interpret solely the 
+pixels without comparing the shapes of the nearby peaks. Further image processing
+may reduce the shadow effect, and has been investigated by many researchers.
+
+It was surprising how little snow cover remained in early summer of 2021. Although
+not covered in this assignment, it will be interesting to perform a time series
+analysis and examine summer snow coverage changes in the Rockies. */
