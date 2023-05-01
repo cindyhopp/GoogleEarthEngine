@@ -18,4 +18,4 @@ The code includes data preprocessing steps, change detection algorithms, and vis
 
 ### Acknowledgments
 
-This repository was developed as part of the Geospatial Data Analytics Program at Centre of Geographic Sciences, NSCC. Thank-you to Rob Hodder for their guidance and support, and the development team of the [Cloud-Based Remote Sensing with Google Earth Engine: Fundamentals and Applications](https://www.eefabook.org/) for a comprehensive guidebook. 
+This repository was developed as part of the Geospatial Data Analytics Program at Centre of Geographic Sciences, NSCC. Thank-you to Rob Hodder for their guidance and support in remote sensing, and the development team of the [Cloud-Based Remote Sensing with Google Earth Engine: Fundamentals and Applications](https://www.eefabook.org/) for a comprehensive guidebook. 
